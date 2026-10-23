@@ -83,6 +83,8 @@ void fused_gr_set_fast(int on);
 void fused_gr_v3_pf(int mask);
 /// The bench only: registers / spills / shared memory / resident blocks a multiprocessor of the v3 kernels (T = 4), one line each.
 void fused_gr_v3_print_resources();
+/// The bench only: the STRATA_GR_Q8_V2 Q8_0 read kernels (n, 0 = off); -1 = STRATA_GR_Q8_V2.
+void fused_gr_set_q8_v2(int on);
 /// The multi read's variants (#315; not main's opt-in STRATA_GR_V3 read, which sums in another order), all computing
 /// every output with the plain read's operations in its order, so bitwise the plain read's and the single-token
 /// read's: plain (0.1.31's default: the norm one block per token, the down projection on 41 blocks), split (the norm
