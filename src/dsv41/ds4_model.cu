@@ -9685,6 +9685,7 @@ struct Model::Impl {
                     }
                     st.cpu_ms += now_ms() - tc;
                     st.cpu_experts += nslots;
+                    st.cpu_entries += (int64_t) ents.size();
                 }
                 if (lc >= 0) lane_answer(ln_cls[(size_t) lc], lt);
             }
@@ -11446,15 +11447,34 @@ struct Model::Impl {
                 cudaSetDevice(devs[di].id);
                 ring_restore_batch(rb[di], p0, g.win, keep, T, g.hd, devs[di].st);
             }
+        // the compressors' state: each device's snapshots back in one launch (a layer's copies touch only its own
+        // state), then each layer's accepted rows compressed again on the same stream
+        std::vector<CopyBatch> cb(devs.size());
+        for (int il = 0; il < g.nl; ++il)
+            for (int m = 0; m < L[(size_t) il].nm; ++m) {
+                Layer& l = member(L[(size_t) il], m);
+                if (l.c_snap == nullptr) continue;
+                CopyBatch& b = cb[(size_t) l.dev];
+                if (b.n + 2 > kMaxCopyBatch) {
+                    cudaSetDevice(devs[(size_t) l.dev].id);
+                    copy_batch(b, devs[(size_t) l.dev].st);
+                    b.n = 0;
+                }
+                const size_t ns = (size_t) l.ratio * g.hd * 4;
+                b.add(l.c_kv, l.c_snap, ns);
+                b.add(l.c_score, l.c_snap + (size_t) l.ratio * g.hd, ns);
+            }
+        for (size_t di = 0; di < devs.size(); ++di)
+            if (cb[di].n > 0) {
+                cudaSetDevice(devs[di].id);
+                copy_batch(cb[di], devs[di].st);
+            }
         for (int il = 0; il < g.nl; ++il)
             for (int m = 0; m < L[(size_t) il].nm; ++m) {
                 Layer& l = member(L[(size_t) il], m);
                 Dev& d = devs[(size_t) l.dev];
                 if (l.c_snap != nullptr) {
                     cudaSetDevice(d.id);
-                    const size_t ns = (size_t) l.ratio * g.hd * 4;
-                    cudaMemcpyAsync(l.c_kv, l.c_snap, ns, cudaMemcpyDeviceToDevice, d.st);
-                    cudaMemcpyAsync(l.c_score, l.c_snap + (size_t) l.ratio * g.hd, ns, cudaMemcpyDeviceToDevice, d.st);
                     compress_win(l.c_rows, l.c_rows + (size_t) kWin * g.hd, l.c_kv, l.c_score, l.ratio, (int) p0, keep,
                                  g.hd, l.c_norm, g.eps, d.latent, d.st);
                 }
@@ -13826,14 +13846,16 @@ struct Model::Impl {
                     finish(ckr, T, HD, HD, fc, s);
                     CK(cudaMemcpyAsync(d.latent, ckr, (size_t) T * HD * 4, cudaMemcpyDeviceToDevice, s));
                 } else {
-                    if (spec_win && l.c_snap != nullptr) {   // to replay the accepted rows if drafts are rejected
+                    if (spec_win && l.c_snap != nullptr) {   // to replay the accepted rows if drafts are rejected (one launch)
                         const size_t ns = (size_t) R * HD * 4, nr = (size_t) T * HD * 4;
                         float* sn = l.c_snap + (size_t) snap * 2 * R * HD;
                         float* rows = l.c_rows + (size_t) r0 * HD;
-                        CK(cudaMemcpyAsync(sn, A.c_kv, ns, cudaMemcpyDeviceToDevice, s));
-                        CK(cudaMemcpyAsync(sn + (size_t) R * HD, A.c_score, ns, cudaMemcpyDeviceToDevice, s));
-                        CK(cudaMemcpyAsync(rows, ckr, nr, cudaMemcpyDeviceToDevice, s));
-                        CK(cudaMemcpyAsync(rows + (size_t) kWin * HD, cgr, nr, cudaMemcpyDeviceToDevice, s));
+                        CopyBatch cb;
+                        cb.add(sn, A.c_kv, ns);
+                        cb.add(sn + (size_t) R * HD, A.c_score, ns);
+                        cb.add(rows, ckr, nr);
+                        cb.add(rows + (size_t) kWin * HD, cgr, nr);
+                        copy_batch(cb, s);
                     }
                     compress_win(ckr, cgr, A.c_kv, A.c_score, R, (int) p0, T, HD, l.c_norm, g.eps, d.latent, s);
                     dump_sub(d, "ckr", l.il, p0, T, ckr, (size_t) T * HD * 4);
