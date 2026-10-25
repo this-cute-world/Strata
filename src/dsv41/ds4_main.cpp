@@ -2482,7 +2482,7 @@ int check_multi(strata::ds4::Model& m, const std::vector<int>& ids, int n) {
 #endif
 
 namespace strata::ds4::gguf {
-int mv_bench(int dev);   // (dev) ds4_gguf.cu
+int mv_bench(int dev, bool check);   // (dev) ds4_gguf.cu
 }
 
 #if defined(STRATA_METAL)
@@ -2491,7 +2491,7 @@ int mv_bench(int dev);   // (dev) ds4_gguf.cu
 int main(int argc, char** argv) {
     strata::ds4::os::fine_timer();
     strata::platform::restore_normal_io_priority();   // #4733
-    if (argc >= 2 && std::string(argv[1]) == "--mv-bench") return strata::ds4::gguf::mv_bench(argc >= 3 ? std::atoi(argv[2]) : 0);
+    if (argc >= 2 && std::string(argv[1]) == "--mv-bench") return strata::ds4::gguf::mv_bench(argc >= 3 ? std::atoi(argv[2]) : 0, argc >= 4 && std::string(argv[3]) == "check");
 #if defined(STRATA_METAL)
     if (argc > 1 && std::string(argv[1]) == "--sampler-test") return sampler_stat::run(argc - 1, argv + 1);   // (the sampler's statistics harness)
 #endif
