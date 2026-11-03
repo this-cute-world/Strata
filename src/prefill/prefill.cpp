@@ -4150,6 +4150,18 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
                 else if (!normed) gr_norm_rs(m.R, (const float*) wn->data, EPS, m.grs, m.xn16, T, m.cs, m.xn16_lo, ldx, xf16);
                 normed = false;
                 pt.mark(kPfHcDown, cs);   // STRATA_PREFILL_TIMING: the hyper-connection read's parts on their own lines (norm stays on "hc read")
+                // STRATA_HC_Q8 without a bf16 copy: dequantize wd (6.55 MB) right before its GEMM so gr_norm_rs and wu
+                // do not evict it from the L2 / Infinity Cache before bf16_proj(wd) reads it.
+                core::WeightRef wd_q8, wu_q8;
+                if (!wd->data && wd->hc_q8) {
+                    wd_q8 = *wd;
+                    wd_q8.data = core::NativeDense::hc_bf16_view(*wd, m.cs, 0, 0);
+                    if (!wd_q8.data) {
+                        err = "prefill: the Q8_0 hyper-connection projections could not be dequantized";
+                        return false;
+                    }
+                    wd = &wd_q8;
+                }
                 bool hcd = false;
                 bool hdown = false;
                 if (wd->q8_scale == nullptr && ldx != D && !pf_hcdown()) {   // not with STRATA_HC_REQ8's int8 rows   // STRATA_HCD_EXACT: the exact-order down kernel when hipBLASLt would take 1176 / 1177
@@ -4206,7 +4218,22 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
                                            (const float*) wn->data, m.mixed, m.mixed_bf, m.mixed_h, T, m.cs, wu_q8_raw);
                     }
                 }
-                if (!upmixed && !bf16_proj(m.gemm, wu, m.lo16, m.gated, T, su, err, 0, m.lo16_lo, 0, m.cs)) return false;
+                if (!upmixed) {
+                    if (!wu->data && wu->hc_q8) {
+                        wu_q8 = *wu;
+                        wu_q8.data = core::NativeDense::hc_bf16_view(*wu, m.cs, 1, 0);
+                        if (!wu_q8.data) {
+                            err = "prefill: the Q8_0 hyper-connection projections could not be dequantized";
+                            return false;
+                        }
+                        wu = &wu_q8;
+                        if (can_upmix && wu_q8_raw != nullptr) {
+                            upmixed = gr_upmix(m.lo16, (const uint16_t*) wu->data, m.R, m.grs,
+                                               (const float*) wn->data, m.mixed, m.mixed_bf, m.mixed_h, T, m.cs);
+                        }
+                    }
+                    if (!upmixed && !bf16_proj(m.gemm, wu, m.lo16, m.gated, T, su, err, 0, m.lo16_lo, 0, m.cs)) return false;
+                }
                 pt.mark(kPfHcInj, cs);
                 if (!hcd && !bf16_proj(m.gemm, wi, m.xn16, m.inj, T, si, err, 0, m.xn16_lo, ldx != D ? ldx : 0, m.cs, xf16)) return false;
                 pt.mark(kPfHcMix, cs);
