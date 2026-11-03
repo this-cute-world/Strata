@@ -9605,7 +9605,8 @@ def start_replicas(cfg: dict, groups: list[list[int]], exe: str, effort_end: lis
             return start_replicas({**cfg, "replica_shared_arena": False}, groups, exe, effort_end, lazy, offline=offline)
         raise SystemExit(f"[strata] replica {i} did not start: {e}")
     load = int(cfg.get("replica_load_tokens") or rp.LOAD_TOKENS)
-    eng = rp.ReplicaEngine(engines, load_tokens=load)
+    prefill = float(cfg.get("replica_prefill_tok_s") or rp.PREFILL_TOK_S)
+    eng = rp.ReplicaEngine(engines, load_tokens=load, prefill_tok_s=prefill)
     if arena:
         eng.__dict__["arena_file"] = arena
         import atexit
