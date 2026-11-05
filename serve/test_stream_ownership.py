@@ -146,6 +146,26 @@ class HookLock:
         return self._lock.locked()
 
 
+class ReleaseHook:
+    """The fork's form of HookLock: an unbatched replica is handed on when its ticket is released (the queue, not a
+    run lock), so the hook runs right after ReplicaEngine._release; locked() is "the replica still has a request"."""
+
+    def __init__(self, rep, k=0):
+        self.rep, self.k = rep, k
+        self.after_release = None
+        orig = rep._release
+
+        def release(t, measured):
+            orig(t, measured)
+            hook, self.after_release = self.after_release, None
+            if hook is not None:
+                hook()
+        rep._release = release
+
+    def locked(self):
+        return self.rep.sched.running[self.k] > 0
+
+
 def collect(gen, into: list) -> None:
     for t in gen:
         if t is not None:
@@ -161,8 +181,7 @@ class ReplicaOwnership(FakeEngines, unittest.TestCase):
         self.rep = ReplicaEngine(self.engines)
         self.rep.heal = lambda: None
         self.engines[1].ended = True          # only replica 0 is alive: every request goes to it
-        self.lock = HookLock()
-        self.rep.run_locks[0] = self.lock
+        self.lock = ReleaseHook(self.rep)
 
     def tearDown(self):
         self.cleanup_engines()
@@ -256,7 +275,7 @@ class ReplicaOwnership(FakeEngines, unittest.TestCase):
         """No hook: B waits for the replica's lock while A is cut off at a random token; 60 repetitions."""
         import random
         rnd = random.Random(4451)
-        self.rep.run_locks[0] = threading.Lock()
+        self.lock.after_release = None
         bad = []
         for i in range(60):
             a_can, b_can = f"QA{i:04d}", f"QB{i:04d}"
@@ -331,7 +350,7 @@ class ReplicaOwnership(FakeEngines, unittest.TestCase):
                 os.kill(engine.proc.pid, signal.SIGCONT)
         self.assertFalse(engine.alive(), "the replica that could not be drained is out of the routing")
         self.assertFalse(self.lock.locked(), "and its run lock is free")
-        self.assertEqual(self.rep.route(prompt_ids("QA0006")), -1)
+        self.assertEqual(self.rep._alive(), [], "no replica is left to route to")
 
 
 class Client(threading.Thread):
