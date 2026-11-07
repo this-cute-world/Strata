@@ -473,8 +473,19 @@ bool fuse_plan_on() {
     static const bool on = [] { const char* v = std::getenv("STRATA_FUSE_PLAN"); return v != nullptr && std::atoi(v) != 0; }();
     return on;
 }
+// It does not know STRATA_ADAPT_FETCH's second target (fetch_blobs' dst2, a VRAM cache slot), so with that on the
+// three launches run as before: fused, the admitted slots would never get their blob.  Read once per process.
 bool fuse_fetch_on() {
-    static const bool on = [] { const char* v = std::getenv("STRATA_FUSE_FETCH"); return v != nullptr && std::atoi(v) != 0; }();
+    static const bool on = [] {
+        const char* v = std::getenv("STRATA_FUSE_FETCH");
+        const char* a = std::getenv("STRATA_ADAPT_FETCH");
+        if (v == nullptr || std::atoi(v) == 0) return false;
+        if (a != nullptr && std::atoi(a) > 0) {
+            std::fprintf(stderr, "STRATA_FUSE_FETCH: off under STRATA_ADAPT_FETCH (the fused fetch has no second target)\n");
+            return false;
+        }
+        return true;
+    }();
     return on;
 }
 
